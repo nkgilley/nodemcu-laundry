@@ -9,7 +9,7 @@ from homeassistant.const import STATE_HOME
 
 DOMAIN = "laundry"
 
-DEPENDENCIES = ['sensor', 'scene', 'device_tracker']
+DEPENDENCIES = ['sensor', 'device_tracker']
 
 # Attribute to tell how much time to wait in "Complete" state before notifying.
 CONF_WAIT_TIME = "wait_time"
@@ -42,23 +42,21 @@ def setup(hass, config):
                 break
         if actually_complete:
             if 'dryer' in entity_id:
-                scene.turn_on(hass, 'scene.red')
+                hass.services.call('scene', 'turn_on', {"entity_id":"scene.red"})
                 message = "The dryer is complete, please empty it!"
             elif 'washer' in entity_id:
-                scene.turn_on(hass, 'scene.blue')
+                hass.services.call('scene', 'turn_on', {"entity_id":"scene.blue"})
                 message = "The washing machine is complete, please empty it!"
             logger.info("LAUNDRY ACTUALLY COMPLETE!!")
-            lauren = hass.states.get(LAURENS_DEVICE).state
-            nolan = hass.states.get(NOLANS_DEVICE).state
-            if lauren == STATE_HOME:
+            if hass.states.get(LAURENS_DEVICE).state == STATE_HOME:
                 hass.services.call('notify', 'join_lauren', {"message":message})
-            if nolan == STATE_HOME:
+            if hass.states.get(NOLANS_DEVICE).state == STATE_HOME:
                 hass.services.call('notify', 'join', {"message":message})
 
     def appliance_emptied(entity_id, old_state, new_state):
         """ Called when appliance goes from running to complete. """
-        scene.turn_on(hass, 'scene.normal')
-
+        hass.services.call('scene', 'turn_on', {"entity_id":"scene.normal"})    
+    
     track_state_change(
             hass, sensors,
             track_complete_status, RUNNING, COMPLETE)
