@@ -24,7 +24,7 @@ NOLANS_DEVICE = 'device_tracker.nolan_phone'
 def setup(hass, config):
     """ Sets up the simple alarms. """
     logger = logging.getLogger(__name__)
-    logger.warning("Starting laundry automation.")
+    logger.info("Starting laundry automation.")
     sensors = ["sensor.washer_status", "sensor.dryer_status"]
     wait_time = config[DOMAIN].get(CONF_WAIT_TIME, 240)
 
