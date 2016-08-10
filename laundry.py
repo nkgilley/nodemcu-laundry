@@ -1,5 +1,31 @@
 """
 Home-Assistant Custom component for Laundry Notifications by Nolan Gilley.
+
+This component will monitor the laundry mqtt sensors sensor.washer_status and
+sensor.dryer_status.  When the washer or dryer has been complete for the wait_time
+specified in the config it will run the washer or dryer complete scene and notify
+whoever is home that the laundry is complete.
+
+This component will also handle the flux automation.  For the flux automation to work
+you need to add an input boolean called flux_automation and make sure it is enabled.
+You also need to have the flux component configured.
+
+Example Config:
+
+laundry:
+  wait_time: 300
+
+switch:
+  - platform: flux
+    lights:
+      - light.desk
+      - light.lamp
+
+input_boolean:
+  flux_automation:
+    name: Flux automation
+    initial: on
+    icon: mdi:lightbulb
 """
 import logging
 import time
@@ -58,12 +84,12 @@ def setup(hass, config):
                 hass.services.call('notify', 'join', {"message":message})
 
     def appliance_emptied(entity_id, old_state, new_state):
-        """ Called when appliance goes from running to complete. """
+        """ Called when appliance goes from complete to empty. """
         hass.services.call('scene', 'turn_on', {"entity_id":"scene.normal"})
         fluxing = True
 
     def flux_update(service):
-        """ Called when appliance goes from running to complete. """
+        """ Called every 30 seconds to flux the lights. """
         if fluxing and hass.states.get('input_boolean.flux_automation').state == 'on':
             hass.services.call('switch', 'flux_update')  
 
