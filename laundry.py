@@ -1,348 +1,107 @@
-/*
-Author: Nolan Gilley
-License: CC-BY-SA, https://creativecommons.org/licenses/by-sa/2.0/
-Date: 7/30/2016
-File: laundry_esp8266.ino
-This sketch is for a NodeMCU wired up with 2 accelerometers and
-2 reed swithches.  An MPU6050 and a reed switch are attached to
-both the wash and dryer.  This sketch will send mqtt messages to
-the defined topics which describe the state of the washer and dryer
-and the details of the accelerometer data.
+"""
+Home-Assistant Custom component for Laundry Notifications by Nolan Gilley.
 
-1) Update the WIFI ssid and password below
-2) Update the thresholds for washer and dryer movement
-*/
+This component will monitor the laundry mqtt sensors sensor.washer_status and
+sensor.dryer_status.  When the washer or dryer has been complete for the wait_time
+specified in the config it will run the washer or dryer complete scene and notify
+whoever is home that the laundry is complete.
 
-// MPU6050 Includes
-#include "Wire.h"
-#include "I2Cdev.h"
-#include "MPU6050.h"
+This component will also handle the flux automation.  For the flux automation to work
+you need to add an input boolean called flux_automation and make sure it is enabled.
+You also need to have the flux component configured.
 
-// ESP8266 Includes
-#include <ESP8266WiFi.h>
-#include <PubSubClient.h>
+Example Config:
 
-// DEFINE NODEMCU PINS
-#define D0 16
-#define D1 5 // I2C Bus SCL (clock)
-#define D2 4 // I2C Bus SDA (data)
-#define D3 0
-#define D4 2 // Same as "LED_BUILTIN", but inverted logic
-#define D5 14 // SPI Bus SCK (clock)
-#define D6 12 // SPI Bus MISO 
-#define D7 13 // SPI Bus MOSI
-#define D8 15 // SPI Bus SS (CS)
-#define D9 3 // RX0 (Serial console)
-#define D10 1 // TX0 (Serial console)
+laundry:
+  wait_time: 300
 
-// DEFINE GPIO PINS
-#define DRYER_DOOR D7 // number of reed sensor for dryer
-#define WASHER_DOOR D8 // number of reed sensor for dryer
+switch:
+  - platform: flux
+    lights:
+      - light.desk
+      - light.lamp
 
-// DEFINE STATES
-#define CLOSED 0  //washer/dryer door closed
-#define OPEN 1 //washer/dryer door open
-#define EMPTY 0 //washer/dryer empty
-#define RUNNING 1 //washer/dryer running
-#define COMPLETE 2 //washer/dryer complete
-#define MOVEMENT_DETECTED 0
-#define MOVEMENT_NOT_DETECTED 1
+input_boolean:
+  flux_automation:
+    name: Flux automation
+    initial: on
+    icon: mdi:lightbulb
+"""
+import logging
+import time
+from homeassistant.components import device_tracker, scene, notify
+from homeassistant.helpers.event import track_state_change, track_time_change
+from homeassistant.const import STATE_HOME
 
-// CONFIGURABLE THRESHOLDS
-#define DRYER_AX_THRESHOLD 17500
-#define DRYER_AY_THRESHOLD 2000
-#define DRYER_AZ_THRESHOLD 3300
+DOMAIN = "laundry"
 
-#define WASHER_AY_THRESHOLD 18000
+DEPENDENCIES = ['sensor', 'device_tracker']
+
+# Attribute to tell how much time to wait in "Complete" state before notifying.
+CONF_WAIT_TIME = "wait_time"
+
+COMPLETE = "Complete"
+RUNNING = "Running"
+EMPTY = "Empty"
+
+LAURENS_DEVICE = 'device_tracker.lauren_s6'
+NOLANS_DEVICE = 'device_tracker.nolan_phone'
+
+fluxing = True # keep track of fluxing locally in this component. The input_boolean.flux_automation still needs to be 'on'
 
 
-// ESP8266 WIFI  ----------------------------------------------------------------
-const char* ssid = "Internet";
-const char* password = "lt7175129399";
+def setup(hass, config):
+    """ Sets up the simple alarms. """
+    logger = logging.getLogger(__name__)
+    logger.info("Starting laundry automation.")
+    sensors = ["sensor.washer_status", "sensor.dryer_status"]
+    wait_time = config[DOMAIN].get(CONF_WAIT_TIME, 240)
 
-const char* mqtt_server = "192.168.1.52";
-const char* mqtt_username = "nolan";
-const char* mqtt_password = "mygreatmqttpassword";
-const char* mqtt_topic_dryer_detail = "sensor/dryer/detail";
-const char* mqtt_topic_washer_detail = "sensor/washer/detail";
-const char* mqtt_topic_washer = "sensor/washer";
-const char* mqtt_topic_dryer = "sensor/dryer";
+    def track_complete_status(entity_id, old_state, new_state):
+        """ Called when appliance goes from running to complete. """
+        actually_complete = True
+        for i in range(1, wait_time):
+            state = hass.states.get(entity_id).state
+            if state == COMPLETE:
+                time.sleep(1)
+            else:
+                actually_complete = False
+                logger.info("LAUNDRY NOT ACTUALLY COMPLETE!!")
+                break
+        if actually_complete:
+            global fluxing
+            fluxing = False
+            if 'dryer' in entity_id:
+                hass.services.call('scene', 'turn_on', {"entity_id":"scene.red"})
+                message = "The dryer is complete, please empty it!"
+            elif 'washer' in entity_id:
+                hass.services.call('scene', 'turn_on', {"entity_id":"scene.blue"})
+                message = "The washing machine is complete, please empty it!"
+            logger.info("LAUNDRY ACTUALLY COMPLETE!!")
+            if hass.states.get(LAURENS_DEVICE).state == STATE_HOME:
+                hass.services.call('notify', 'join_lauren', {"message":message})
+            if hass.states.get(NOLANS_DEVICE).state == STATE_HOME:
+                hass.services.call('notify', 'join', {"message":message})
 
-WiFiClient espClient;
-PubSubClient client(espClient);
-// END ESP8266 WIFI  ------------------------------------------------------------
+    def appliance_emptied(entity_id, old_state, new_state):
+        """ Called when appliance goes from complete to empty. """
+        hass.services.call('scene', 'turn_on', {"entity_id":"scene.normal"})
+        global fluxing
+        fluxing = True
 
+    def flux_update(service):
+        """ Called every 30 seconds to flux the lights. """
+        global fluxing
+        ib_flux_state = hass.states.get('input_boolean.flux_automation')
+        if fluxing and ib_flux_state:
+            if ib_flux_state.state == 'on':
+                hass.services.call('switch', 'flux_update')  
 
-// MPU-6050 Accelerometers ------------------------------------------------------
-MPU6050 MPU_DRYER(0x68); //DRYER
-MPU6050 MPU_WASHER(0x69); //WASHER
-
-int16_t dryer_ax, dryer_ay, dryer_az;
-int16_t dryer_gx, dryer_gy, dryer_gz;
-int16_t dryer_ax_min = 0, dryer_ax_max = 0, dryer_ax_range;
-int16_t dryer_ay_min = 0, dryer_ay_max = 0, dryer_ay_range;
-int16_t dryer_az_min = 0, dryer_az_max = 0, dryer_az_range;
-
-int16_t washer_ax, washer_ay, washer_az;
-int16_t washer_gx, washer_gy, washer_gz;
-int16_t washer_ax_min = 0, washer_ax_max = 0, washer_ax_range;
-int16_t washer_ay_min = 0, washer_ay_max = 0, washer_ay_range;
-int16_t washer_az_min = 0, washer_az_max = 0, washer_az_range;
-// end MPU-6050-------------------------------------------------------------------
-
-
-
-// accelerometer sensor 1 (Dryer) ===============================================
-int dryer_reading = 0; //reading = 1 mean no noise, 0=noise
-int dryer_reading_previous = 0;
-int dryer_state = EMPTY;  //1 = running, 0 = empty, 2 = complete
-int last_dryer_state = EMPTY;
-
-unsigned long sample_time = 0;   //millis of last reading
-int dryer_detector_count = 0;   //number of captures
-int dryer_detected_count = 0; //number of readings showing sound
-
-int dryer_door_status = 0;
-
-// accelerometer sensor 2 (Washer) ==============================================
-int washer_reading = 0; //reading = 1 mean no noise, 0=noise
-int washer_reading_previous = 0;
-int washer_state = EMPTY;  //1 = running, 0 = empty, 2 = complete
-int last_washer_state = EMPTY;
-
-int washer_detector_count = 0;   //number of captures
-int washer_detected_count = 0; //number of readings showing sound
-
-int washer_door_status = 0;
-
-char dryerString[50];
-char washerString[50]; 
-
-void setup()
-{
-  Serial.begin(115200); // setup serial
-
-  // setup WiFi
-  setup_wifi();
-  client.setServer(mqtt_server, 1883);
-  client.setCallback(callback);
-  Wire.begin();
-  MPU_DRYER.initialize();
-  MPU_WASHER.initialize();
-  pins_init();
-  reconnect();
-  update_via_mqtt();
-}
-
-void setup_wifi() {
-  delay(10);
-  // We start by connecting to a WiFi network
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-
-  WiFi.begin(ssid, password);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
-}
-
-void callback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  for (int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
-  }
-  Serial.println();
-}
-
-void reconnect() {
-  // Loop until we're reconnected
-  while (!client.connected()) {
-    Serial.print("Attempting MQTT connection...");
-    // Attempt to connect
-    if (client.connect("ESP8266Client", mqtt_username, mqtt_password)) {
-      Serial.println("connected");
-    } else {
-      Serial.print("failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
-      // Wait 5 seconds before retrying
-      delay(5000);
-    }
-  }
-}
-
-void loop()
-{
-  last_dryer_state = dryer_state;
-  last_washer_state = washer_state;
-  if (!client.connected()) {
-    reconnect();
-  }
-  client.loop();
-
-  //===================================================================
-  //dryer/washer door reed switches
-  // 1 = door open, 0 = door closed
-  dryer_door_status = digitalRead(DRYER_DOOR);
-  washer_door_status = digitalRead(WASHER_DOOR);
-
-  // if dryer door is opened and dryer cycle is complete
-  if (dryer_door_status == OPEN and dryer_state == COMPLETE)
-  {
-      dryer_state = EMPTY; // set dryer to empty
-  }
-
-  // if washer door is open and washer cycle is complete
-  if (washer_door_status == OPEN and washer_state == COMPLETE)
-  {
-      washer_state = EMPTY; //set washer to empty
-  }
-  
-  MPU_DRYER.getMotion6(&dryer_ax, &dryer_ay, &dryer_az, &dryer_gx, &dryer_gy, &dryer_gz);
-  MPU_WASHER.getMotion6(&washer_ax, &washer_ay, &washer_az, &washer_gx, &washer_gy, &washer_gz);
-  trackMinMax(dryer_ax, &dryer_ax_min, &dryer_ax_max);
-  trackMinMax(dryer_ay, &dryer_ay_min, &dryer_ay_max);
-  trackMinMax(dryer_az, &dryer_az_min, &dryer_az_max);
-  trackMinMax(washer_ax, &washer_ax_min, &washer_ax_max);
-  trackMinMax(washer_ay, &washer_ay_min, &washer_ay_max);
-  trackMinMax(washer_az, &washer_az_min, &washer_az_max);
-//  deal with millis rollover
-  if (sample_time > millis())
-  {
-    sample_time = millis();
-  }
-
-  // samples every 5 sec
-  if ((millis() - sample_time) > 5000)
-  {
-    sample_time = millis();    //reset sample_time to wait for next Xms
-
-    // Calculate Range for each accelerometer direction.
-    dryer_ax_range = dryer_ax_max - dryer_ax_min;
-    dryer_ay_range = dryer_ay_max - dryer_ay_min;
-    dryer_az_range = dryer_az_max - dryer_az_min;
-    washer_ax_range = washer_ax_max - washer_ax_min;
-    washer_ay_range = washer_ay_max - washer_ay_min;
-    washer_az_range = washer_az_max - washer_az_min;
-
-    // Reset Range Counters
-    dryer_ax_min = 0, dryer_ax_max = 0;
-    dryer_ay_min = 0, dryer_ay_max = 0;
-    dryer_az_min = 0, dryer_az_max = 0;
-    washer_ax_min = 0, washer_ax_max = 0;
-    washer_ay_min = 0, washer_ay_max = 0;
-    washer_az_min = 0, washer_az_max = 0;
-
-//  sprintf(dryerString, "dryer %d, %d, %d, %d, %d", dryer_door_status, dryer_state, dryer_ax_range, dryer_ay_range, dryer_az_range);
-//  sprintf(washerString, "washer %d, %d, %d, %d, %d", washer_door_status, washer_state, washer_ax_range, washer_ay_range, washer_az_range);
-//  client.publish(mqtt_topic_dryer_detail, dryerString);
-//  client.publish(mqtt_topic_washer_detail, washerString);
-//  update_via_mqtt();
-//  Serial.println(dryerString);
-//  Serial.println(washerString);
-
-    if (abs(dryer_ax_range > DRYER_AX_THRESHOLD) and abs(dryer_ay_range > DRYER_AY_THRESHOLD) and abs(dryer_az_range > DRYER_AZ_THRESHOLD))
-    {
-      dryer_reading = MOVEMENT_DETECTED;
-    }
-    if (abs(washer_ax_range) > WASHER_AY_THRESHOLD)
-    {
-      washer_reading = MOVEMENT_DETECTED;
-    }
-
-    dryer_detector_count = dryer_detector_count + 1;          //count how many times we listened
-    if (dryer_reading == MOVEMENT_DETECTED)                    //count how many times detected movement
-    {
-      dryer_detected_count = dryer_detected_count + 1;
-    }
-
-    washer_detector_count = washer_detector_count + 1;          //count how many times we listened
-    if (washer_reading == MOVEMENT_DETECTED)                    //count how many times detected movement
-    {
-      washer_detected_count = washer_detected_count + 1;
-    }
-    dryer_reading = MOVEMENT_NOT_DETECTED;        //reset
-    washer_reading = MOVEMENT_NOT_DETECTED;        //reset
-
-  }//end reading every 5 seconds
-
-  if (dryer_detector_count >= 8)
-  {
-    if (dryer_door_status == CLOSED)
-    {
-      if (dryer_detected_count >= 5) dryer_state = RUNNING;
-      else if (dryer_state == RUNNING) dryer_state = COMPLETE;
-    }
-    dryer_detector_count = 0;
-    dryer_detected_count = 0;
-  }
-
-  if (washer_detector_count >= 15)
-  {
-    if (washer_door_status == CLOSED)
-    {
-      if (washer_detected_count >= 3) washer_state = RUNNING;
-      else if (washer_state == RUNNING and washer_door_status == CLOSED) washer_state = COMPLETE;
-    }
-    washer_detector_count = 0;
-    washer_detected_count = 0;
-  }
-
-  if (last_dryer_state != dryer_state or last_washer_state != washer_state)
-  {
-    update_via_mqtt();
-  }
- 
-
-}// end loop
-
-void pins_init()
-{
-  pinMode(DRYER_DOOR, INPUT);
-  pinMode(WASHER_DOOR, INPUT);
-}
-
-void update_via_mqtt()
-{
-  if (dryer_state == RUNNING) {
-    client.publish(mqtt_topic_dryer, "Running", true);
-  }
-  else if (dryer_state == COMPLETE) {
-    client.publish(mqtt_topic_dryer, "Complete", true);
-  }
-  else {
-    client.publish(mqtt_topic_dryer, "Empty", true);
-  }
-  if (washer_state == RUNNING) {
-    client.publish(mqtt_topic_washer, "Running", true);
-  }
-  else if (washer_state == COMPLETE) {
-    client.publish(mqtt_topic_washer, "Complete", true);
-  }
-  else {
-    client.publish(mqtt_topic_washer, "Empty", true);
-  }
-  Serial.println("mqtt published!");
-}
-
-int16_t trackMinMax(int16_t current, int16_t *min, int16_t *max)
-{
-  if (current > *max)
-  {
-    *max = current;
-  }
-  else if (current < *min)
-  {
-    *min = current;
-  }
-}
+    track_state_change(
+            hass, sensors,
+            track_complete_status, RUNNING, COMPLETE)
+    track_state_change(
+            hass, sensors,
+            appliance_emptied, COMPLETE, EMPTY)
+    track_time_change(hass, flux_update, second=[0,30])
+    return True
