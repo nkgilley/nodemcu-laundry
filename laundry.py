@@ -26,6 +26,38 @@ input_boolean:
     name: Flux automation
     initial: on
     icon: mdi:lightbulb
+
+scene:
+  - name: Normal
+    entities:
+      light.lamp:
+        state: on
+        profile: reading
+        transition: 2
+      light.desk:
+        state: on
+        profile: relax
+        transition: 2
+  - name: Red
+    entities:
+      light.lamp:
+        state: on
+        rgb_color: [255, 0, 0]
+        brightness: 200
+      light.desk:
+        state: on
+        rgb_color: [255, 0, 0]
+        brightness: 200
+  - name: Blue
+    entities:
+      light.lamp:
+        state: on
+        rgb_color: [0, 0, 255]
+        brightness: 200
+      light.desk:
+        state: on
+        rgb_color: [0, 0, 255]
+        brightness: 200
 """
 import logging
 import time
