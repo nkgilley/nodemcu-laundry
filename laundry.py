@@ -47,6 +47,7 @@ EMPTY = "Empty"
 LAURENS_DEVICE = 'device_tracker.lauren_s6'
 NOLANS_DEVICE = 'device_tracker.nolan_phone'
 
+fluxing = True # keep track of fluxing locally in this component. The input_boolean.flux_automation still needs to be 'on'
 
 
 def setup(hass, config):
@@ -55,13 +56,11 @@ def setup(hass, config):
     logger.info("Starting laundry automation.")
     sensors = ["sensor.washer_status", "sensor.dryer_status"]
     wait_time = config[DOMAIN].get(CONF_WAIT_TIME, 240)
-    fluxing = True # keep track of fluxing locally in this component. The input boolean still needs to be 'on'
 
     def track_complete_status(entity_id, old_state, new_state):
         """ Called when appliance goes from running to complete. """
-        state = hass.states.get(entity_id).state
         actually_complete = True
-        for i in range(1,wait_time):
+        for i in range(1, wait_time):
             state = hass.states.get(entity_id).state
             if state == COMPLETE:
                 time.sleep(1)
@@ -70,6 +69,7 @@ def setup(hass, config):
                 logger.info("LAUNDRY NOT ACTUALLY COMPLETE!!")
                 break
         if actually_complete:
+            global fluxing
             fluxing = False
             if 'dryer' in entity_id:
                 hass.services.call('scene', 'turn_on', {"entity_id":"scene.red"})
@@ -86,10 +86,12 @@ def setup(hass, config):
     def appliance_emptied(entity_id, old_state, new_state):
         """ Called when appliance goes from complete to empty. """
         hass.services.call('scene', 'turn_on', {"entity_id":"scene.normal"})
+        global fluxing
         fluxing = True
 
     def flux_update(service):
         """ Called every 30 seconds to flux the lights. """
+        global fluxing
         if fluxing and hass.states.get('input_boolean.flux_automation').state == 'on':
             hass.services.call('switch', 'flux_update')  
 
