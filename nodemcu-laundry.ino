@@ -1,7 +1,8 @@
 /*
 Author: Nolan Gilley
+License: CC-BY-SA, https://creativecommons.org/licenses/by-sa/2.0/
 Date: 7/30/2016
-File: nodemcu-laundry.ino
+File: laundry_esp8266.ino
 This sketch is for a NodeMCU wired up with 2 accelerometers and
 2 reed swithches.  An MPU6050 and a reed switch are attached to
 both the wash and dryer.  This sketch will send mqtt messages to
@@ -48,8 +49,11 @@ and the details of the accelerometer data.
 #define MOVEMENT_NOT_DETECTED 1
 
 // CONFIGURABLE THRESHOLDS
-#define DRYER_AZ_THRESHOLD 3400
-#define WASHER_AY_THRESHOLD 17000
+#define DRYER_AX_THRESHOLD 17500
+#define DRYER_AY_THRESHOLD 2000
+#define DRYER_AZ_THRESHOLD 3300
+
+#define WASHER_AY_THRESHOLD 18000
 
 
 // ESP8266 WIFI  ----------------------------------------------------------------
@@ -122,13 +126,12 @@ void setup()
   setup_wifi();
   client.setServer(mqtt_server, 1883);
   client.setCallback(callback);
-  client.publish(mqtt_topic_washer, "Empty");
-  client.publish(mqtt_topic_dryer, "Empty");
-
   Wire.begin();
   MPU_DRYER.initialize();
   MPU_WASHER.initialize();
   pins_init();
+  reconnect();
+  update_via_mqtt();
 }
 
 void setup_wifi() {
@@ -240,16 +243,15 @@ void loop()
     washer_ay_min = 0, washer_ay_max = 0;
     washer_az_min = 0, washer_az_max = 0;
 
-  sprintf(dryerString, "dryer %d, %d, %d, %d, %d", dryer_door_status, dryer_state, dryer_ax_range, dryer_ay_range, dryer_az_range);
-  sprintf(washerString, "washer %d, %d, %d, %d, %d", washer_door_status, washer_state, washer_ax_range, washer_ay_range, washer_az_range);
-  client.publish(mqtt_topic_dryer_detail, dryerString);
-  client.publish(mqtt_topic_washer_detail, washerString);
-  update_via_mqtt();
-  Serial.println("mqtt published!");
-  Serial.println(dryerString);
-  Serial.println(washerString);
+//  sprintf(dryerString, "dryer %d, %d, %d, %d, %d", dryer_door_status, dryer_state, dryer_ax_range, dryer_ay_range, dryer_az_range);
+//  sprintf(washerString, "washer %d, %d, %d, %d, %d", washer_door_status, washer_state, washer_ax_range, washer_ay_range, washer_az_range);
+//  client.publish(mqtt_topic_dryer_detail, dryerString);
+//  client.publish(mqtt_topic_washer_detail, washerString);
+//  update_via_mqtt();
+//  Serial.println(dryerString);
+//  Serial.println(washerString);
 
-    if (abs(dryer_az_range > DRYER_AZ_THRESHOLD))
+    if (abs(dryer_ax_range > DRYER_AX_THRESHOLD) and abs(dryer_ay_range > DRYER_AY_THRESHOLD) and abs(dryer_az_range > DRYER_AZ_THRESHOLD))
     {
       dryer_reading = MOVEMENT_DETECTED;
     }
@@ -278,14 +280,14 @@ void loop()
   {
     if (dryer_door_status == CLOSED)
     {
-      if (dryer_detected_count >= 3) dryer_state = RUNNING;
+      if (dryer_detected_count >= 5) dryer_state = RUNNING;
       else if (dryer_state == RUNNING) dryer_state = COMPLETE;
     }
     dryer_detector_count = 0;
     dryer_detected_count = 0;
   }
 
-  if (washer_detector_count >= 13)
+  if (washer_detector_count >= 15)
   {
     if (washer_door_status == CLOSED)
     {
@@ -313,23 +315,24 @@ void pins_init()
 void update_via_mqtt()
 {
   if (dryer_state == RUNNING) {
-    client.publish(mqtt_topic_dryer, "Running");
+    client.publish(mqtt_topic_dryer, "Running", true);
   }
   else if (dryer_state == COMPLETE) {
-    client.publish(mqtt_topic_dryer, "Complete");
+    client.publish(mqtt_topic_dryer, "Complete", true);
   }
   else {
-    client.publish(mqtt_topic_dryer, "Empty");
+    client.publish(mqtt_topic_dryer, "Empty", true);
   }
   if (washer_state == RUNNING) {
-    client.publish(mqtt_topic_washer, "Running");
+    client.publish(mqtt_topic_washer, "Running", true);
   }
   else if (washer_state == COMPLETE) {
-    client.publish(mqtt_topic_washer, "Complete");
+    client.publish(mqtt_topic_washer, "Complete", true);
   }
   else {
-    client.publish(mqtt_topic_washer, "Empty");
+    client.publish(mqtt_topic_washer, "Empty", true);
   }
+  Serial.println("mqtt published!");
 }
 
 int16_t trackMinMax(int16_t current, int16_t *min, int16_t *max)
