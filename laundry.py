@@ -87,7 +87,7 @@ def setup(hass, config):
     logger = logging.getLogger(__name__)
     logger.info("Starting laundry automation.")
     sensors = ["sensor.washer_status", "sensor.dryer_status"]
-    wait_time = config[DOMAIN].get(CONF_WAIT_TIME, 240)
+    wait_time = config[DOMAIN].get(CONF_WAIT_TIME, 300)
 
     def track_complete_status(entity_id, old_state, new_state):
         """ Called when appliance goes from running to complete. """
