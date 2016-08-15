@@ -11,6 +11,34 @@ and the details of the accelerometer data.
 
 1) Update the WIFI ssid and password below
 2) Update the thresholds for washer and dryer movement
+
+The thresholds are also configurable over mqtt!
+
+The ESP8266 will publish mqtt commands to:
+sensor/dryer/(EMPTY,RUNNING,COMPLETE)
+sensor/washer/(EMPTY,RUNNING,COMPLETE)
+sensor/dryer/detail: dryer %d, %d, %d, %d, %d", dryer_door_status, dryer_state, dryer_ax_range, dryer_ay_range, dryer_az_range
+sensor/washer/detail: dryer %d, %d, %d, %d, %d", washer_door_status, washer_state, washer_ax_range, washer_ay_range, washer_az_range
+
+And it SUBSCRIBES to:
+
+sensor/dryer/set/ax
+Ax value for dryer (int)
+sensor/dryer/set/ay
+Ay value for dryer (int)
+sensor/dryer/set/az
+Az value for dryer (int)
+sensor/washer/set/ay
+Ay value for washer (int)
+sensor/dryer/set/detected
+# of dryer detections out of 15 cycles
+sensor/washer/set/detected
+# of washer detections of of 15
+sensor/dryer/set/detail
+0 or 1 (off/on)
+sensor/washer/set/detail
+0 or 1
+
 */
 
 // MPU6050 Includes
@@ -48,21 +76,13 @@ and the details of the accelerometer data.
 #define MOVEMENT_DETECTED 0
 #define MOVEMENT_NOT_DETECTED 1
 
-// CONFIGURABLE THRESHOLDS
-#define DRYER_AX_THRESHOLD 17500
-#define DRYER_AY_THRESHOLD 2000
-#define DRYER_AZ_THRESHOLD 3300
-
-#define WASHER_AY_THRESHOLD 18000
-
-
 // ESP8266 WIFI  ----------------------------------------------------------------
 const char* ssid = "Internet";
-const char* password = "lt7175129399";
+const char* password = "xxx";
 
 const char* mqtt_server = "192.168.1.52";
 const char* mqtt_username = "nolan";
-const char* mqtt_password = "mygreatmqttpassword";
+const char* mqtt_password = "xxx";
 const char* mqtt_topic_dryer_detail = "sensor/dryer/detail";
 const char* mqtt_topic_washer_detail = "sensor/washer/detail";
 const char* mqtt_topic_washer = "sensor/washer";
@@ -118,6 +138,18 @@ int washer_door_status = 0;
 char dryerString[50];
 char washerString[50]; 
 
+// CONFIGURABLE THRESHOLDS
+int dryer_ax_threshold = 17500;
+int dryer_ay_threshold = 2000;
+int dryer_az_threshold = 3300;
+
+int washer_ay_threshold = 18000;
+
+int dryer_detected_threshold = 9;
+int washer_detected_threshold = 3;
+int dryer_detailed_reporting = 0;
+int washer_detailed_reporting = 0;
+
 void setup()
 {
   Serial.begin(115200); // setup serial
@@ -162,15 +194,81 @@ void callback(char* topic, byte* payload, unsigned int length) {
     Serial.print((char)payload[i]);
   }
   Serial.println();
+  if (strcmp(topic, "sensor/washer/set/ay") == 0) {
+    payload[length] = '\0';
+    String s = String((char*)payload);
+    int i= s.toInt();
+    washer_ay_threshold = i;
+    Serial.print("washer ay set to ");
+    Serial.println(i);
+  }
+  else if (strcmp(topic, "sensor/dryer/set/ax") == 0) {
+    payload[length] = '\0';
+    String s = String((char*)payload);
+    int i= s.toInt();
+    dryer_ax_threshold = i;
+    Serial.print("dryer ax set to ");
+    Serial.println(i);
+  }
+  else if (strcmp(topic, "sensor/dryer/set/ay") == 0) {
+    payload[length] = '\0';
+    String s = String((char*)payload);
+    int i= s.toInt();
+    dryer_ay_threshold = i;
+    Serial.print("dryer ay set to ");
+    Serial.println(i);
+  }
+  else if (strcmp(topic, "sensor/dryer/set/az") == 0) {
+    payload[length] = '\0';
+    String s = String((char*)payload);
+    int i= s.toInt();
+    dryer_ax_threshold = i;
+    Serial.print("dryer az set to ");
+    Serial.println(i);
+  }
+  else if (strcmp(topic, "sensor/dryer/set/detected") == 0) {
+    payload[length] = '\0';
+    String s = String((char*)payload);
+    int i= s.toInt();
+    dryer_detected_threshold = i;
+    Serial.print("dryer detected threshold set to ");
+    Serial.println(i);
+  }
+  else if (strcmp(topic, "sensor/washer/set/detected") == 0) {
+    payload[length] = '\0';
+    String s = String((char*)payload);
+    int i= s.toInt();
+    washer_detected_threshold = i;
+    Serial.print("washer detected threshold set to ");
+    Serial.println(i);
+  }
+  else if (strcmp(topic, "sensor/washer/set/detail") == 0) {
+    payload[length] = '\0';
+    String s = String((char*)payload);
+    int i= s.toInt();
+    washer_detailed_reporting = i;
+    Serial.print("washer detailed reporting set to ");
+    Serial.println(i);
+  }
+  else if (strcmp(topic, "sensor/dryer/set/detail") == 0) {
+    payload[length] = '\0';
+    String s = String((char*)payload);
+    int i= s.toInt();
+    dryer_detailed_reporting = i;
+    Serial.print("dryer detailed reporting set to ");
+    Serial.println(i);
+  }
 }
 
 void reconnect() {
   // Loop until we're reconnected
   while (!client.connected()) {
-    Serial.print("Attempting MQTT connection...");
+//    Serial.print("Attempting MQTT connection...");
     // Attempt to connect
     if (client.connect("ESP8266Client", mqtt_username, mqtt_password)) {
-      Serial.println("connected");
+//      Serial.println("connected");
+      client.subscribe("sensor/washer/set/+");
+      client.subscribe("sensor/dryer/set/+");
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
@@ -243,19 +341,22 @@ void loop()
     washer_ay_min = 0, washer_ay_max = 0;
     washer_az_min = 0, washer_az_max = 0;
 
-//  sprintf(dryerString, "dryer %d, %d, %d, %d, %d", dryer_door_status, dryer_state, dryer_ax_range, dryer_ay_range, dryer_az_range);
-//  sprintf(washerString, "washer %d, %d, %d, %d, %d", washer_door_status, washer_state, washer_ax_range, washer_ay_range, washer_az_range);
-//  client.publish(mqtt_topic_dryer_detail, dryerString);
-//  client.publish(mqtt_topic_washer_detail, washerString);
-//  update_via_mqtt();
-//  Serial.println(dryerString);
-//  Serial.println(washerString);
+if (dryer_detailed_reporting == 1) {
+  sprintf(dryerString, "dryer %d, %d, %d, %d, %d", dryer_door_status, dryer_state, dryer_ax_range, dryer_ay_range, dryer_az_range);
+  client.publish(mqtt_topic_dryer_detail, dryerString);
+  Serial.println(dryerString);
+}
+if (washer_detailed_reporting == 1) {
+  sprintf(washerString, "washer %d, %d, %d, %d, %d", washer_door_status, washer_state, washer_ax_range, washer_ay_range, washer_az_range);
+  client.publish(mqtt_topic_washer_detail, washerString);
+  Serial.println(washerString);
+}
 
-    if (abs(dryer_ax_range > DRYER_AX_THRESHOLD) and abs(dryer_ay_range > DRYER_AY_THRESHOLD) and abs(dryer_az_range > DRYER_AZ_THRESHOLD))
+    if (abs(dryer_ax_range > dryer_ax_threshold) and abs(dryer_ay_range > dryer_ay_threshold) and abs(dryer_az_range > dryer_az_threshold))
     {
       dryer_reading = MOVEMENT_DETECTED;
     }
-    if (abs(washer_ax_range) > WASHER_AY_THRESHOLD)
+    if (abs(washer_ax_range) > washer_ay_threshold)
     {
       washer_reading = MOVEMENT_DETECTED;
     }
@@ -276,11 +377,11 @@ void loop()
 
   }//end reading every 5 seconds
 
-  if (dryer_detector_count >= 8)
+  if (dryer_detector_count >= 15)
   {
     if (dryer_door_status == CLOSED)
     {
-      if (dryer_detected_count >= 5) dryer_state = RUNNING;
+      if (dryer_detected_count >= dryer_detected_threshold) dryer_state = RUNNING;
       else if (dryer_state == RUNNING) dryer_state = COMPLETE;
     }
     dryer_detector_count = 0;
@@ -291,7 +392,7 @@ void loop()
   {
     if (washer_door_status == CLOSED)
     {
-      if (washer_detected_count >= 3) washer_state = RUNNING;
+      if (washer_detected_count >= washer_detected_threshold) washer_state = RUNNING;
       else if (washer_state == RUNNING and washer_door_status == CLOSED) washer_state = COMPLETE;
     }
     washer_detector_count = 0;
